@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <windows.h>
 #include <shobjidl.h>
+#include <string>
 #include "nfd_common.h"
 
 
@@ -454,6 +455,91 @@ end:
     
     return nfdResult;
 }
+
+
+nfdresult_t NFD_OpenDialogWCHAR_T(const nfdchar_t *filterList,
+    const nfdchar_t *defaultPath,
+    wchar_t **outPath) {
+    nfdresult_t nfdResult = NFD_ERROR;
+
+    // Init COM library.
+    HRESULT coResult = ::CoInitializeEx(NULL,
+        ::COINIT_APARTMENTTHREADED | ::COINIT_DISABLE_OLE1DDE);
+
+    ::IFileOpenDialog *fileOpenDialog(NULL);
+
+    if (!SUCCEEDED(coResult) && coResult != RPC_E_CHANGED_MODE) {
+        fileOpenDialog = NULL;
+        NFDi_SetError("Could not initialize COM.");
+        goto end;
+    }
+
+    // Create dialog
+    HRESULT result = ::CoCreateInstance(::CLSID_FileOpenDialog, NULL,
+        CLSCTX_ALL, ::IID_IFileOpenDialog,
+        reinterpret_cast<void **>(&fileOpenDialog));
+
+    if (!SUCCEEDED(result)) {
+        NFDi_SetError("Could not create dialog.");
+        goto end;
+    }
+
+    // Build the filter list
+    if (!AddFiltersToDialog(fileOpenDialog, filterList)) {
+        goto end;
+    }
+
+    // Set the default path
+    if (!SetDefaultPath(fileOpenDialog, defaultPath)) {
+        goto end;
+    }
+
+    // Show the dialog.
+    result = fileOpenDialog->Show(NULL);
+    if (SUCCEEDED(result)) {
+        // Get the file name
+        ::IShellItem *shellItem(NULL);
+        result = fileOpenDialog->GetResult(&shellItem);
+        if (!SUCCEEDED(result)) {
+            NFDi_SetError("Could not get shell item from dialog.");
+            goto end;
+        }
+        wchar_t *filePath(NULL);
+        result = shellItem->GetDisplayName(::SIGDN_FILESYSPATH, &filePath);
+        if (!SUCCEEDED(result)) {
+            NFDi_SetError("Could not get file path for selected.");
+            shellItem->Release();
+            goto end;
+        }
+
+
+        *outPath = filePath;
+        CoTaskMemFree(filePath);
+        if (!outPath) {
+            /* error is malloc-based, error message would be redundant */
+            shellItem->Release();
+            goto end;
+        }
+
+        nfdResult = NFD_OKAY;
+        shellItem->Release();
+    } else if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        nfdResult = NFD_CANCEL;
+    } else {
+        NFDi_SetError("File dialog box show failed.");
+        nfdResult = NFD_ERROR;
+    }
+
+end:
+    if (fileOpenDialog)
+        fileOpenDialog->Release();
+
+    if (SUCCEEDED(coResult))
+        ::CoUninitialize();
+
+    return nfdResult;
+}
+
 
 nfdresult_t NFD_OpenDialogMultiple( const nfdchar_t *filterList,
                                     const nfdchar_t *defaultPath,
